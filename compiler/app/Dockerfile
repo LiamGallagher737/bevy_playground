@@ -17,5 +17,5 @@ RUN cargo fetch
 RUN cargo build --release
 
 # Build the app
-CMD cargo build --release \
-  && mv target/wasm32-unknown-unknown/release/app.wasm src/app.wasm
+# CMD cargo build --release \
+#   && mv target/wasm32-unknown-unknown/release/app.wasm src/app.wasm

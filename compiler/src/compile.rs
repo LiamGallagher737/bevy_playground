@@ -1,10 +1,11 @@
 //! The complete `/compile` route
 
-use super::{APP_CONTAINER_TAG, CODE_FILE_NAME, OUTPUT_WASM_NAME};
+use super::{CODE_FILE_NAME, OUTPUT_WASM_NAME};
+use crate::docker_pool::DockerPool;
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
+    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -14,26 +15,27 @@ use tokio::{
 };
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct CompileInfo {
-    pub(crate) code: String,
+pub struct CompileInfo {
+    code: String,
 }
 
-pub(crate) async fn compile(Json(input): Json<CompileInfo>) -> Result<Vec<u8>, CompileError> {
-    let code_dir = tempfile::tempdir()?;
-    let code_dir_path = code_dir.path();
+pub async fn compile(
+    Extension(container_pool): Extension<DockerPool>,
+    Json(input): Json<CompileInfo>,
+) -> Result<Vec<u8>, CompileError> {
+    let (id, container) = container_pool.take().await;
 
-    let mut code_file = File::create(code_dir_path.join(CODE_FILE_NAME)).await?;
+    let mut code_file = File::create(container.directory.join(CODE_FILE_NAME)).await?;
     code_file.write_all(input.code.as_bytes()).await?;
 
-    let code_dir_path_str = code_dir_path.to_string_lossy();
     let time = std::time::Instant::now();
     let command_status = Command::new("docker")
         .args([
-            "run",
-            // "--rm",
-            "-v",
-            &format!("{code_dir_path_str}:/usr/src/app/src/"),
-            APP_CONTAINER_TAG,
+            "exec",
+            &container.name,
+            "sh",
+            "-c",
+            "cargo build --release && mv target/wasm32-unknown-unknown/release/app.wasm src/app.wasm"
         ])
         .output()
         .await?;
@@ -42,20 +44,22 @@ pub(crate) async fn compile(Json(input): Json<CompileInfo>) -> Result<Vec<u8>, C
 
     if !command_status.status.success() {
         return Err(CompileError::Compile(
-            String::from_utf8(command_status.stderr).unwrap(),
+            String::from_utf8(command_status.stdout).unwrap(),
         ));
     }
 
     let mut wasm = Vec::new();
-    File::open(code_dir_path.join(OUTPUT_WASM_NAME))
+    File::open(container.directory.join(OUTPUT_WASM_NAME))
         .await?
         .read_to_end(&mut wasm)
         .await?;
 
+    container_pool.release(id).await;
+
     Ok(wasm)
 }
 
-pub(crate) enum CompileError {
+pub enum CompileError {
     Io(std::io::Error),
     Compile(String),
 }
@@ -89,7 +93,7 @@ impl IntoResponse for CompileError {
 }
 
 #[derive(Serialize)]
-pub(crate) struct Error {
-    pub(crate) msg: &'static str,
-    pub(crate) full: String,
+struct Error {
+    msg: &'static str,
+    full: String,
 }

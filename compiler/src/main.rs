@@ -1,11 +1,16 @@
-use axum::{extract::DefaultBodyLimit, handler::Handler, routing::post, Router};
+use crate::docker_pool::DockerPool;
+use axum::{extract::DefaultBodyLimit, handler::Handler, routing::post, Extension, Router};
 use std::net::SocketAddr;
+use tokio::signal;
 
 const CODE_FILE_NAME: &str = "main.rs";
 const OUTPUT_WASM_NAME: &str = "app.wasm";
 const APP_CONTAINER_TAG: &str = "liamg737/bevy_playground_app:0.0.1";
 const APP_CONTAINER_RELATIVE_DIR: &str = "./app";
 const BODY_SIZE_LIMIT: usize = 250_000; // 0.25 MB
+
+const MIN_READY_CONTAINERS: usize = 1;
+const MAX_READY_CONTAINERS: usize = 3;
 
 mod compile;
 mod docker_pool;
@@ -30,15 +35,47 @@ async fn main() {
         .parse::<u16>()
         .expect("Failed to parse enviroment variable 'PORT' to type u16");
 
-    let app = Router::new().route(
-        "/compile",
-        post(compile::compile.layer(DefaultBodyLimit::max(BODY_SIZE_LIMIT))),
-    );
+    let docker_pool = DockerPool::new(MIN_READY_CONTAINERS).await;
+
+    let app = Router::new()
+        .route(
+            "/compile",
+            post(compile::compile.layer(DefaultBodyLimit::max(BODY_SIZE_LIMIT))),
+        )
+        .layer(Extension(docker_pool));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     println!("Listening on {}", addr);
+
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    println!("Shutting down app");
 }
