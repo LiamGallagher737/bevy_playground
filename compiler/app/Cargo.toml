@@ -1,0 +1,10 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.10"
+
+[profile.release.package."*"]
+opt-level = 'z'
