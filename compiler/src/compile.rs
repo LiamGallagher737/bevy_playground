@@ -28,7 +28,7 @@ pub async fn compile(
     let mut code_file = File::create(container.directory.join(CODE_FILE_NAME)).await?;
     code_file.write_all(input.code.as_bytes()).await?;
 
-    let time = std::time::Instant::now();
+    // let time = std::time::Instant::now();
     let command_status = Command::new("docker")
         .args([
             "exec",
@@ -39,8 +39,7 @@ pub async fn compile(
         ])
         .output()
         .await?;
-
-    println!("Elapsed: {:.2?}", time.elapsed());
+    // println!("Elapsed: {:.2?}", time.elapsed());
 
     if !command_status.status.success() {
         return Err(CompileError::Compile(

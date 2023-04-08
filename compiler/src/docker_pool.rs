@@ -86,6 +86,7 @@ impl DockerPool {
                     "run",
                     "--name",
                     &name,
+                    "--rm",
                     "-d",
                     "-i",
                     "-t",
@@ -106,15 +107,6 @@ impl DockerPool {
             if cmd.is_err() || !cmd.unwrap().success() {
                 println!("Failed to startup new container!");
             }
-        }
-    }
-
-    pub async fn _cleanup(self) {
-        for container in self.containers.read().await.values() {
-            let _ = std::fs::remove_dir_all(container.directory.clone());
-            let _ = std::process::Command::new("docker")
-                .args(&["stop", &container.name])
-                .status();
         }
     }
 }

@@ -1,7 +1,8 @@
 use crate::docker_pool::DockerPool;
 use axum::{extract::DefaultBodyLimit, handler::Handler, routing::post, Extension, Router};
+use futures::future::join_all;
 use std::net::SocketAddr;
-use tokio::signal;
+use tokio::{process::Command, signal};
 
 const CODE_FILE_NAME: &str = "main.rs";
 const OUTPUT_WASM_NAME: &str = "app.wasm";
@@ -20,9 +21,10 @@ mod docker_pool;
 #[tokio::main]
 async fn main() {
     // Replace with docker image pull APP_CONTAINER_TAG
-    let image_build_command = std::process::Command::new("docker")
+    let image_build_command = Command::new("docker")
         .args(["build", "-t", APP_CONTAINER_TAG, APP_CONTAINER_RELATIVE_DIR])
         .status()
+        .await
         .expect("Failed to run build command for compiler docker image");
 
     if !image_build_command.success() {
@@ -60,13 +62,13 @@ async fn shutdown_signal() {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
-            .expect("failed to install Ctrl+C handler");
+            .expect("Failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]
     let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
+            .expect("Failed to install signal handler")
             .recv()
             .await;
     };
@@ -79,27 +81,30 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
 
-    println!("Shutting down app");
+    println!("Shutting down gracefully");
 
-    let out = tokio::process::Command::new("docker")
-        .args(&["container", "ls", "-q", "--filter", "name=\"bp-dp.*\""])
+    let out = Command::new("docker")
+        .args(&["container", "ls", "-q", "--filter", "name=bp-dp.*"])
         .output()
         .await
         .expect("Failed to list matching containers");
 
-    dbg!(&out);
-    // let out = String::from_utf8(out).unwrap();
-    // let containers: Vec<_> = out.lines().collect();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let containers: Vec<_> = stdout.lines().collect();
 
-    // tokio::process::Command::new("docker")
-    //     .args(&[
-    //         "container",
-    //         "stop",
-    //         "$(docker container ls -q --filter name=\"bp-dp.*\"",
-    //     ])
-    //     .status()
-    //     .await
-    //     .expect("Failed to shutdown containers");
+    let mut commands = Vec::with_capacity(containers.len());
+    for id in containers {
+        let cmd = Command::new("docker").args(&["stop", id]).status();
+        commands.push(cmd);
+    }
+    let status = join_all(commands).await;
+
+    if status
+        .iter()
+        .any(|s| s.is_err() || !s.as_ref().unwrap().success())
+    {
+        eprintln!("Error: One or more compiler containers failed to stop!");
+    }
 
     let temp_dir = std::env::temp_dir();
     tokio::fs::remove_dir_all(temp_dir.join(TEMP_PATH))
