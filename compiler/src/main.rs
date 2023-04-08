@@ -12,6 +12,8 @@ const BODY_SIZE_LIMIT: usize = 250_000; // 0.25 MB
 const MIN_READY_CONTAINERS: usize = 1;
 const MAX_READY_CONTAINERS: usize = 3;
 
+const TEMP_PATH: &str = ".bevy_playground";
+
 mod compile;
 mod docker_pool;
 
@@ -78,4 +80,29 @@ async fn shutdown_signal() {
     }
 
     println!("Shutting down app");
+
+    let out = tokio::process::Command::new("docker")
+        .args(&["container", "ls", "-q", "--filter", "name=\"bp-dp.*\""])
+        .output()
+        .await
+        .expect("Failed to list matching containers");
+
+    dbg!(&out);
+    // let out = String::from_utf8(out).unwrap();
+    // let containers: Vec<_> = out.lines().collect();
+
+    // tokio::process::Command::new("docker")
+    //     .args(&[
+    //         "container",
+    //         "stop",
+    //         "$(docker container ls -q --filter name=\"bp-dp.*\"",
+    //     ])
+    //     .status()
+    //     .await
+    //     .expect("Failed to shutdown containers");
+
+    let temp_dir = std::env::temp_dir();
+    tokio::fs::remove_dir_all(temp_dir.join(TEMP_PATH))
+        .await
+        .expect("Failed to remove temp directory");
 }
