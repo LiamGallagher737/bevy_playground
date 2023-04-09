@@ -10,12 +10,12 @@ RUN rustup target add wasm32-unknown-unknown
 
 # Copy Base Project
 WORKDIR /usr/src/app
-COPY . .
+RUN cargo init --name game
+COPY ./Cargo.toml ./Cargo.toml
+COPY ./.cargo ./.cargo
 
 # Build deps
 RUN cargo fetch
 RUN cargo build --release
-
-# Build the app
-# CMD cargo build --release \
-#   && mv target/wasm32-unknown-unknown/release/app.wasm src/app.wasm
+RUN rm src/*.rs
+RUN rm ./target/wasm32-unknown-unknown/release/deps/game*

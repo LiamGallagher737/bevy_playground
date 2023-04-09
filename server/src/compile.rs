@@ -15,73 +15,90 @@ use tokio::{
 };
 
 #[derive(Debug, Deserialize)]
-pub struct CompileInfo {
+pub struct Body {
     code: String,
 }
 
 pub async fn compile(
     Extension(container_pool): Extension<DockerPool>,
-    Json(input): Json<CompileInfo>,
-) -> Result<Vec<u8>, CompileError> {
+    Json(body): Json<Body>,
+) -> Result<Wasm, Error> {
     let (id, container) = container_pool.take().await;
 
     let mut code_file = File::create(container.directory.join(CODE_FILE_NAME)).await?;
-    code_file.write_all(input.code.as_bytes()).await?;
+    code_file.write_all(body.code.as_bytes()).await?;
 
-    // let time = std::time::Instant::now();
     let command_status = Command::new("docker")
         .args([
             "exec",
             &container.name,
             "sh",
             "-c",
-            "cargo build --release && mv target/wasm32-unknown-unknown/release/app.wasm src/app.wasm"
+            &format!(
+                "cargo build --release && mv target/wasm32-unknown-unknown/release/{OUTPUT_WASM_NAME} src/{OUTPUT_WASM_NAME}",
+            ),
         ])
         .output()
         .await?;
-    // println!("Elapsed: {:.2?}", time.elapsed());
 
     if !command_status.status.success() {
-        return Err(CompileError::Compile(
+        return Err(Error::Compile(
             String::from_utf8(command_status.stdout).unwrap(),
         ));
     }
 
-    let mut wasm = Vec::new();
-    File::open(container.directory.join(OUTPUT_WASM_NAME))
-        .await?
-        .read_to_end(&mut wasm)
-        .await?;
+    let mut file = File::open(container.directory.join(OUTPUT_WASM_NAME)).await?;
+    let mut wasm = Vec::with_capacity(file.metadata().await?.len() as usize);
+    file.read_to_end(&mut wasm).await?;
 
     container_pool.release(id).await;
 
-    Ok(wasm)
+    Ok(Wasm(wasm))
 }
 
-pub enum CompileError {
+pub struct ContentType<T> {
+    content_type: &'static str,
+    body: T,
+}
+
+impl<T: IntoResponse> IntoResponse for ContentType<T> {
+    fn into_response(self) -> Response {
+        ([("content-type", self.content_type)], self.body).into_response()
+    }
+}
+
+pub struct Wasm(Vec<u8>);
+
+impl IntoResponse for Wasm {
+    fn into_response(self) -> Response {
+        ([("content-type", "application/wasm")], self.0).into_response()
+    }
+}
+
+pub enum Error {
     Io(std::io::Error),
     Compile(String),
 }
 
-impl From<std::io::Error> for CompileError {
+impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
     }
 }
 
-impl IntoResponse for CompileError {
+impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
-            CompileError::Io(e) => (
+            Self::Io(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(Error {
+                Json(ErrorResponse {
                     msg: "Io error",
                     full: format!("{e:#?}"),
                 }),
             ),
-            CompileError::Compile(stderr) => (
+            Self::Compile(stderr) => (
                 StatusCode::BAD_REQUEST,
-                Json(Error {
+                Json(ErrorResponse {
                     msg: "Could not compile app",
                     full: stderr,
                 }),
@@ -92,7 +109,7 @@ impl IntoResponse for CompileError {
 }
 
 #[derive(Serialize)]
-struct Error {
+struct ErrorResponse {
     msg: &'static str,
     full: String,
 }

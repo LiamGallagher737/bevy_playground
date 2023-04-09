@@ -16,9 +16,10 @@ docker build -t liamg737/bevy_playground:0.0.1 .
 Run compiler server image
 
 ```
-docker run --rm -v "/var/run/docker.sock:/var/run/docker.sock" -p 8080:8080 liamg737/bevy_playground:0.0.1
+docker run -v /var/run/docker.sock:/var/run/docker.sock -p 8080:8080 liamg737/bevy_playground:0.0.1
+docker run --rm -v "/var/run/docker.sock:/var/run/docker.sock" -p 8080:8080 liamg737/bevy_playground:0.0.1 sh -c "usr/src/app/compiler"
 ```
 
 ```
-docker run --rm --group-add 0 -v "/var/run/docker.sock:/var/run/docker.sock" -p 8080:8080 liamg737/bevy_playground:0.0.1
+docker run --rm --privileged --group-add 0 -v "/var/run/docker.sock:/var/run/docker.sock" -p 8080:8080 liamg737/bevy_playground:0.0.1
 ```

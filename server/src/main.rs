@@ -1,15 +1,18 @@
+#![warn(clippy::pedantic)]
+
 use crate::docker_pool::DockerPool;
 use axum::{extract::DefaultBodyLimit, handler::Handler, routing::post, Extension, Router};
-use futures::future::join_all;
 use std::net::SocketAddr;
 use tokio::{process::Command, signal};
 
 const CODE_FILE_NAME: &str = "main.rs";
-const OUTPUT_WASM_NAME: &str = "app.wasm";
-const APP_CONTAINER_TAG: &str = "liamg737/bevy_playground_app:0.0.1";
-const APP_CONTAINER_RELATIVE_DIR: &str = "./app";
+const OUTPUT_WASM_NAME: &str = "game.wasm";
+const CONTAINER_TAG: &str = "liamg737/bevy_playground_compiler_instance:0.0.1";
+const CONTAINER_RELATIVE_DIR: &str = "./compiler_instance";
+const CONTAINER_PREFIX: &str = "bp-dp";
 const BODY_SIZE_LIMIT: usize = 250_000; // 0.25 MB
 
+const INITIAL_READY_CONTAINERS: usize = (MIN_READY_CONTAINERS + MAX_READY_CONTAINERS) / 2;
 const MIN_READY_CONTAINERS: usize = 1;
 const MAX_READY_CONTAINERS: usize = 3;
 
@@ -20,26 +23,24 @@ mod docker_pool;
 
 #[tokio::main]
 async fn main() {
-    // Replace with docker image pull APP_CONTAINER_TAG
-    let image_build_command = Command::new("docker")
-        .args(["build", "-t", APP_CONTAINER_TAG, APP_CONTAINER_RELATIVE_DIR])
-        .status()
-        .await
-        .expect("Failed to run build command for compiler docker image");
-
-    if !image_build_command.success() {
-        panic!(
-            "Compiler container image build failed! Error: {:#?}",
-            image_build_command
-        );
-    }
-
     let port = std::env::var("PORT")
         .expect("Failed to get enviroment variable 'PORT'")
         .parse::<u16>()
         .expect("Failed to parse enviroment variable 'PORT' to type u16");
 
-    let docker_pool = DockerPool::new(MIN_READY_CONTAINERS).await;
+    // Replace with docker image pull APP_CONTAINER_TAG
+    let image_build_command = Command::new("docker")
+        .args(["build", "-t", CONTAINER_TAG, CONTAINER_RELATIVE_DIR])
+        .status()
+        .await
+        .expect("Failed to run build command for compiler docker image");
+
+    assert!(
+        image_build_command.success(),
+        "Compiler container image build failed! Error: {image_build_command:#?}"
+    );
+
+    let docker_pool = DockerPool::new(INITIAL_READY_CONTAINERS).await;
 
     let app = Router::new()
         .route(
@@ -49,7 +50,7 @@ async fn main() {
         .layer(Extension(docker_pool));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("Listening on {}", addr);
+    println!("Listening on {addr}");
 
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
@@ -84,25 +85,20 @@ async fn shutdown_signal() {
     println!("Shutting down gracefully");
 
     let out = Command::new("docker")
-        .args(&["container", "ls", "-q", "--filter", "name=bp-dp.*"])
+        .args(["container", "ls", "-q", "--filter", &format!("name={CONTAINER_PREFIX}.*")])
         .output()
         .await
         .expect("Failed to list matching containers");
 
     let stdout = String::from_utf8(out.stdout).unwrap();
     let containers: Vec<_> = stdout.lines().collect();
+    let status = Command::new("docker")
+        .arg("kill")
+        .args(containers)
+        .status()
+        .await;
 
-    let mut commands = Vec::with_capacity(containers.len());
-    for id in containers {
-        let cmd = Command::new("docker").args(&["stop", id]).status();
-        commands.push(cmd);
-    }
-    let status = join_all(commands).await;
-
-    if status
-        .iter()
-        .any(|s| s.is_err() || !s.as_ref().unwrap().success())
-    {
+    if status.is_err() || !status.as_ref().unwrap().success() {
         eprintln!("Error: One or more compiler containers failed to stop!");
     }
 
