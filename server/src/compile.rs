@@ -1,7 +1,7 @@
 //! The complete `/compile` route
 
 use super::{CODE_FILE_NAME, OUTPUT_WASM_NAME};
-use crate::docker_pool::DockerPool;
+use crate::{docker_pool::DockerPool, OUTPUT_WASM_NAME_BG};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -14,11 +14,17 @@ use tokio::{
     process::Command,
 };
 
+const ADDITIONAL_CODE: &[u8] = b"#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn bevy_playground_run_app() {
+    main();
+}";
+
 #[derive(Debug, Deserialize)]
 pub struct Body {
     code: String,
 }
 
+// FIXME: In case of error, container is not released
 pub async fn compile(
     Extension(container_pool): Extension<DockerPool>,
     Json(body): Json<Body>,
@@ -26,6 +32,7 @@ pub async fn compile(
     let (id, container) = container_pool.take().await;
 
     let mut code_file = File::create(container.directory.join(CODE_FILE_NAME)).await?;
+    code_file.write_all(ADDITIONAL_CODE).await?;
     code_file.write_all(body.code.as_bytes()).await?;
 
     let command_status = Command::new("docker")
@@ -35,7 +42,7 @@ pub async fn compile(
             "sh",
             "-c",
             &format!(
-                "cargo build --release && mv target/wasm32-unknown-unknown/release/{OUTPUT_WASM_NAME} src/{OUTPUT_WASM_NAME}",
+                "cargo b --release && wasm-bindgen target/wasm32-unknown-unknown/release/{OUTPUT_WASM_NAME} --out-dir ./src/out --target web",
             ),
         ])
         .output()
@@ -47,7 +54,7 @@ pub async fn compile(
         ));
     }
 
-    let mut file = File::open(container.directory.join(OUTPUT_WASM_NAME)).await?;
+    let mut file = File::open(container.directory.join("out").join(OUTPUT_WASM_NAME_BG)).await?;
     let mut wasm = Vec::with_capacity(file.metadata().await?.len() as usize);
     file.read_to_end(&mut wasm).await?;
 

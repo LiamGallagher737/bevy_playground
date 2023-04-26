@@ -1,12 +1,20 @@
 #![warn(clippy::pedantic)]
 
 use crate::docker_pool::DockerPool;
-use axum::{extract::DefaultBodyLimit, handler::Handler, routing::post, Extension, Router};
+use axum::{
+    extract::DefaultBodyLimit,
+    handler::Handler,
+    http::{Method},
+    routing::post,
+    Extension, Router,
+};
 use std::net::SocketAddr;
 use tokio::{process::Command, signal};
+use tower_http::cors::{Any, CorsLayer};
 
 const CODE_FILE_NAME: &str = "main.rs";
 const OUTPUT_WASM_NAME: &str = "game.wasm";
+const OUTPUT_WASM_NAME_BG: &str = "game_bg.wasm";
 const CONTAINER_TAG: &str = "liamg737/bevy_playground_compiler_instance:0.0.1";
 const CONTAINER_RELATIVE_DIR: &str = "./compiler_instance";
 const CONTAINER_PREFIX: &str = "bp-dp";
@@ -47,7 +55,13 @@ async fn main() {
             "/compile",
             post(compile::compile.layer(DefaultBodyLimit::max(BODY_SIZE_LIMIT))),
         )
-        .layer(Extension(docker_pool));
+        .layer(Extension(docker_pool))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Method::POST)
+                .allow_headers(Any),
+        );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     println!("Listening on {addr}");
@@ -85,7 +99,13 @@ async fn shutdown_signal() {
     println!("Shutting down gracefully");
 
     let out = Command::new("docker")
-        .args(["container", "ls", "-q", "--filter", &format!("name={CONTAINER_PREFIX}.*")])
+        .args([
+            "container",
+            "ls",
+            "-q",
+            "--filter",
+            &format!("name={CONTAINER_PREFIX}.*"),
+        ])
         .output()
         .await
         .expect("Failed to list matching containers");
